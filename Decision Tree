@@ -1,0 +1,101 @@
+  # ==========================================
+# 16. ÁRBOL DE DECISIÓN (VERSIÓN CLÍNICA Y ESTADÍSTICA)
+# ==========================================
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_curve, auc, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import numpy as np
+
+# 1. PREPARACIÓN Y DIVISIÓN DE DATOS (0-24 meses)
+df_tree = df_clean[df_clean['Age in months'] <= 24].dropna(subset=vars_cluster).copy()
+df_tree = df_tree[df_tree['Neutralization (Log TIC50)'] < 19000].copy()
+df_tree['Log10_Título_IgG'] = np.log10(df_tree['Título IgG'].replace(0, 1))
+df_tree['Vax_Num'] = df_tree['Vax'].apply(binarizar_vax)
+df_tree = df_tree.dropna(subset=['Vax_Num'])
+
+
+vars_continuas = [
+    'Age in months',
+    'Log10_Título_IgG',
+    'Neutralization (Log TIC50)',
+    'Avidity Index 1/200',
+    'IgA (DO corr)'
+]
+
+X = df_tree[vars_continuas]
+y = df_tree['Vax_Num']
+
+# Separamos un 30% de los datos EXCLUSIVAMENTE para validación estadística
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+
+# 2. ENTRENAMIENTO DEL ÁRBOL
+tree_model = DecisionTreeClassifier(max_depth=3, class_weight='balanced', random_state=42)
+tree_model.fit(X_train, y_train)
+
+# 3. CÁLCULO DE MÉTRICAS ESTADÍSTICAS (En el Set de Prueba)
+y_pred = tree_model.predict(X_test)
+y_prob = tree_model.predict_proba(X_test)[:, 1]
+
+cm = confusion_matrix(y_test, y_pred)
+tn, fp, fn, tp = cm.ravel()
+sensibilidad = tp / (tp + fn) if (tp + fn) > 0 else 0
+especificidad = tn / (tn + fp) if (tn + fp) > 0 else 0
+fpr, tpr, _ = roc_curve(y_test, y_prob)
+roc_auc = auc(fpr, tpr)
+
+print("\n--- ESTADÍSTICA DEL ÁRBOL DE DECISIÓN (Set de Prueba independiente) ---")
+print(f"Sensibilidad (Tasa de acierto en Vacunados): {sensibilidad:.1%}")
+print(f"Especificidad (Tasa de acierto en No Vacunados): {especificidad:.1%}")
+print(f"Área Bajo la Curva ROC (AUC): {roc_auc:.3f}")
+
+# ==========================================
+# 4. VISUALIZACIÓN MULTIPANEL: Árbol Limpio + Métricas
+# ==========================================
+fig = plt.figure(figsize=(22, 12))
+plt.style.use('default')
+
+# Configuramos la grilla para poner el árbol arriba y los gráficos abajo
+ax_tree = plt.subplot2grid((3, 2), (0, 0), colspan=2, rowspan=2)
+ax_cm = plt.subplot2grid((3, 2), (2, 0))
+ax_roc = plt.subplot2grid((3, 2), (2, 1))
+
+# PANEL A: ÁRBOL SIMPLIFICADO (impurity=False quita el "Gini", proportion=False quita el "value")
+plot_tree(
+    tree_model,
+    feature_names=vars_continuas,
+    class_names=['No Vac', 'Vacunado'],
+    filled=True,
+    rounded=True,
+    impurity=True,    # Oculta el índice de Gini
+    proportion=False,
+    node_ids=False,
+    fontsize=12,
+    ax=ax_tree
+)
+ax_tree.set_title('Algoritmo de Decisión Clínica (Reglas descubiertas de forma autónoma)', fontsize=16, fontweight='bold')
+
+# PANEL B: MATRIZ DE CONFUSIÓN
+sns.heatmap(
+    cm, annot=True, fmt='d', cmap='Blues', cbar=False,
+    xticklabels=['Predicción: No Vac', 'Predicción: Vac'],
+    yticklabels=['Real: No Vac', 'Real: Vac'],
+    annot_kws={"size": 16, "weight": "bold"}, ax=ax_cm
+)
+ax_cm.set_title(f'Matriz de Confusión\nSens: {sensibilidad:.1%} | Esp: {especificidad:.1%}', fontsize=14, fontweight='bold', pad=15)
+
+# PANEL C: CURVA ROC
+ax_roc.plot(fpr, tpr, color='#eb6834', lw=2.5, label=f'ROC Árbol (AUC = {roc_auc:.3f})')
+ax_roc.plot([0, 1], [0, 1], color='gray', lw=1.5, linestyle='--')
+ax_roc.set_xlim([0.0, 1.0])
+ax_roc.set_ylim([0.0, 1.05])
+ax_roc.set_xlabel('Tasa de Falsos Positivos (1 - Especificidad)', fontsize=11)
+ax_roc.set_ylabel('Tasa de Verdaderos Positivos (Sensibilidad)', fontsize=11)
+ax_roc.set_title('Capacidad Predictiva del Árbol (Set de Prueba)', fontsize=14, fontweight='bold', pad=15)
+ax_roc.legend(loc="lower right", fontsize=12, frameon=True)
+ax_roc.grid(linestyle=':', alpha=0.6)
+
+plt.tight_layout()
+plt.show()
